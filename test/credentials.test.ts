@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -53,6 +53,19 @@ describe("credential store", () => {
     expect((await loadCredential(path, "http://a"))?.accessToken).toBe("three");
     expect((await loadCredential(path, "http://b"))?.accessToken).toBe("two");
     expect(JSON.parse(await readFile(path, "utf8")).credentials).toHaveLength(2);
+  });
+
+  it.skipIf(process.platform === "win32")("restricts POSIX credential permissions, including an existing file", async () => {
+    dir = await mkdtemp(join(tmpdir(), "t3mcp-permissions-"));
+    const folder = join(dir, "private");
+    const path = join(folder, "credentials.json");
+    const credential = { origin: "http://localhost", accessToken: "fake-test-token", scope: "s", issuedAt: "2026-01-01", expiresAt: "2099-01-01" };
+    await saveCredential(path, credential);
+    expect((await stat(folder)).mode & 0o777).toBe(0o700);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    await chmod(path, 0o644);
+    await saveCredential(path, credential);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it("prefers T3_ACCESS_TOKEN, then the store, and explains when the token expired", async () => {

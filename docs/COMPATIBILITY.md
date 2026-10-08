@@ -7,7 +7,17 @@
 - Local stdio MCP client, official T3 pairing, authenticated loopback HTTP and WebSocket connections.
 - Available Codex, Claude and OpenCode catalogs read from the server. Actual agent turns tested with Claude Sonnet 5.5; this is not a claim that every listed model was exercised.
 
-## Results
+## Platform coverage
+
+| Platform | Automated coverage | Pairing helper | Live T3 desktop |
+| --- | --- | --- | --- |
+| Windows | Node 22/24: build, tests, CLI pairing against a mock server | PowerShell, hidden input and current-user ACL | Verified |
+| macOS | Node 22/24: build, tests, CLI pairing, POSIX credential permissions | Bash (compatible with bundled Bash 3.2), hidden input | Not yet verified |
+| Linux | Node 22/24: build, tests, CLI pairing, POSIX credential permissions | Bash, hidden input | Not yet verified |
+
+CI runner coverage is not certification of every OS version, CPU architecture, desktop distribution, or T3 installation method. Consult the repository's Actions runs for the current commit's results. Core transport and discovery use Node APIs without a PowerShell dependency.
+
+## Initial live verification results
 
 - Build, typecheck and 80 automated regression tests passed at initial V2 validation.
 - All 10 MCP tools registered; project, worktree, provider and thread reads succeeded.
@@ -27,7 +37,7 @@ The first cold Claude startup took about 70 seconds while its existing MCP conne
 - Five simultaneously active agents were not launched or load-tested.
 - T3 was not restarted because existing user sessions must not be disrupted. Durable state remains owned by T3; clients should reconnect, re-read state and retry with original idempotency keys after a restart. No exactly-once claim across arbitrary future server behavior is made.
 - Fresh worktree creation uses the documented V2 workspace strategy and is unit-tested; live testing used an existing scratch root. Setup suppression is not supported by this launch contract and is rejected.
-- CI covers Windows/Linux and Node 22/24; a configured CI matrix is not evidence of green runs until GitHub executes it.
+- CI covers Windows/macOS/Linux and Node 22/24; a configured CI matrix is not evidence of green runs until GitHub executes it.
 - Credentials expire or can be revoked. Re-pair through T3 if authentication fails. The MCP process does not automatically refresh a revoked token.
 - Waiting has a deadline. A timed-out request must not be treated as completed or retried with a new key.
 - Full projections are currently read for reliable idempotency checks. Very large histories can cost more bandwidth/memory. Bounded/incomplete history is rejected rather than silently missing an earlier request.

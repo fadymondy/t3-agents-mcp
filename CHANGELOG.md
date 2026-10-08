@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add macOS to the Node 22/24 CI matrix alongside Windows and Linux.
+- Add a hidden-input Bash pairing helper for macOS/Linux, shipped with the package and stored with LF line endings.
+- Add cross-platform CLI pairing coverage, including paths with spaces, secret redaction and POSIX credential permissions.
+- Document installation, Codex/Claude configuration, home directory discovery and validation limits on all three platforms.
+
 ## 0.3.0 ? T3 orchestration V2 support
 
 - Forked from gfsaaser24/t3-code-agent-mcp at 4a47996.

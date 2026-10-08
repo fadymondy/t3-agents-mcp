@@ -8,7 +8,8 @@ This is a maintained fork of [gfsaaser24/t3-code-agent-mcp](https://github.com/g
 
 ## Compatibility
 
-- Verified on Windows with Node 24.19 and T3 `0.0.46-nightly.20261006.2752`.
+- **Windows, macOS, and Linux**: portable Node.js stdio server, with CI covering all three on Node 22 and 24.
+- Live T3 communication verified on Windows with Node 24.19 and T3 `0.0.46-nightly.20261006.2752`. macOS/Linux coverage uses automated tests and a local mock server; live desktop sessions on those platforms have not yet been exercised.
 - Node **22.12+** required; Node 24 recommended for the tested setup.
 - Codex and Claude are discovered from T3's actual provider/model catalog. A provider must already be installed, enabled, and signed in through T3.
 - T3 orchestration V1 is **not supported**. Future nightly builds may change contracts; unknown run states fail closed.
@@ -16,7 +17,9 @@ This is a maintained fork of [gfsaaser24/t3-code-agent-mcp](https://github.com/g
 
 ## Install from GitHub
 
-```powershell
+The same commands work in Windows PowerShell, macOS Terminal, and Linux shells. Install Node.js 22.12+ and Git first, and start your existing T3 Code instance.
+
+```sh
 git clone https://github.com/fadymondy/t3-agents-mcp.git
 cd t3-agents-mcp
 npm ci
@@ -36,7 +39,13 @@ Use `dist/cli.js`. No global installation, new listener, public tunnel, or T3 mo
 powershell -NoProfile -File .\scripts\pair.ps1
 ```
 
-The helper sends the link over stdin to the package's official pairing exchange. It does not put the secret in process arguments, shell history, or console output. Use only a localhost or explicitly trusted endpoint. For other platforms, provide the link through a protected input mechanism to:
+On **macOS or Linux**, use the Bash helper from an interactive terminal (works with macOS's bundled Bash):
+
+```sh
+bash scripts/pair.sh
+```
+
+Both helpers hide input and send the link over stdin to the package's official pairing exchange. They do not put the secret in process arguments, shell history, or console output. Use only a localhost or explicitly trusted endpoint. For headless use, provide protected input to:
 
 ```sh
 node dist/cli.js pair --stdin
@@ -56,11 +65,19 @@ A successful status reports token validity, projects, threads, and harnesses. A 
 
 Substitute your actual absolute paths:
 
+**Windows PowerShell:**
+
 ```powershell
 codex mcp add t3 --env T3_SERVER_URL=http://127.0.0.1:3773 -- "C:/Program Files/nodejs/node.exe" "E:/Tools/t3-agents-mcp/dist/cli.js"
 ```
 
-The port above is an example. Discover your endpoint using `status`; do not assume it. Omitting `T3_SERVER_URL` enables runtime-file discovery.
+**macOS / Linux** (run from this package's checkout):
+
+```sh
+codex mcp add t3 -- "$(command -v node)" "$(pwd)/dist/cli.js"
+```
+
+The port above is an example. Discover your endpoint using `status`; do not assume it. Omitting `T3_SERVER_URL` enables runtime-file discovery. Absolute Node paths are recommended because GUI apps may not inherit your shell's PATH or Node version manager setup.
 
 Equivalent TOML:
 
@@ -70,14 +87,33 @@ command = "C:/Program Files/nodejs/node.exe"
 args = ["E:/Tools/t3-agents-mcp/dist/cli.js"]
 ```
 
+On macOS/Linux, use your actual executable and checkout paths, for example:
+
+```toml
+[mcp_servers.t3]
+command = "/usr/local/bin/node"
+args = ["/absolute/path/to/t3-agents-mcp/dist/cli.js"]
+```
+
+Find Node with `command -v node`; Homebrew, system packages and version managers can use different paths. Do not assume `/usr/local/bin/node` exists.
+
 Preserve other MCP entries. New sessions load the configuration; reconnect the MCP client if an existing session still has the old process.
 
 ## Connect Claude Code to a project
 
 Run in your project directory:
 
+**Windows PowerShell:**
+
 ```powershell
 claude mcp add t3 "C:/Program Files/nodejs/node.exe" "E:/Tools/t3-agents-mcp/dist/cli.js" --scope local --transport stdio
+claude mcp get t3
+```
+
+**macOS / Linux:**
+
+```sh
+claude mcp add t3 "$(command -v node)" "/absolute/path/to/t3-agents-mcp/dist/cli.js" --scope local --transport stdio
 claude mcp get t3
 ```
 
@@ -138,6 +174,8 @@ The upstream default runtime mode remains `full-access`; explicitly request `app
 | `T3CODE_HOME` | T3 runtime discovery directory; default `~/.t3` |
 | `T3_ACCESS_TOKEN` | Optional injected token; prefer local pairing for interactive use |
 | `T3_MCP_CREDENTIALS` | Optional credential-store path |
+
+Home paths resolve through Node's `os.homedir()`: typically `C:/Users/<user>` on Windows, `/Users/<user>` on macOS, and `/home/<user>` on Linux. Runtime discovery reads `<home>/.t3/userdata/server-runtime.json` or `<home>/.t3/dev/server-runtime.json`; `T3CODE_HOME` overrides the discovery directory. WSL and containers have separate homes/process namespaces: use their own T3 instance or an explicitly trusted endpoint, rather than assuming Windows auto-discovery applies.
 
 ## Validation
 

@@ -15,7 +15,8 @@
     "README.md",
     "NOTICE",
     "docs/COMPATIBILITY.md",
-    "scripts/pair.ps1"
+    "scripts/pair.ps1",
+    "scripts/pair.sh"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
