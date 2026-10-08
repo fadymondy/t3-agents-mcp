@@ -90,6 +90,7 @@ export class T3RpcClient {
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("clientSurface", "web");
       url.searchParams.set("connectionMethod", "direct");
+      url.searchParams.set("orchestrationProtocol", "2");
       const socket = new WebSocket(url, {
         headers: { authorization: `Bearer ${this.token}` },
         handshakeTimeout: 10_000,

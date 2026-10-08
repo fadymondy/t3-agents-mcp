@@ -103,13 +103,11 @@ describe("t3_create_thread", () => {
     const call = harness({
       shell: async () => shell([threadShell(ids.threadId, null)]),
       config: async () => ({ providers: [provider] }),
-      startTurn: async (spec) => {
+      createThreadWithFirstTurn: async (spec) => {
         started.push(spec);
         return { sequence: 2 };
       },
-      createThreadWithFirstTurn: async () => {
-        throw new Error("must not re-bootstrap");
-      },
+
       thread: async () => detail(threadShell(ids.threadId, null)),
     });
     const result = await call("t3_create_thread", base("k2"));

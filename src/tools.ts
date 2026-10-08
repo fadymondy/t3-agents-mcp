@@ -75,7 +75,7 @@ const latestAssistantReply = (snapshot: ThreadDetailSnapshot): Message | null =>
     const byId = snapshot.thread.messages.find((m) => m.id === turn.assistantMessageId);
     if (byId) return byId;
   }
-  return [...snapshot.thread.messages].reverse().find((m) => m.role === "assistant") ?? null;
+  return turn ? [...snapshot.thread.messages].reverse().find((m) => m.role === "assistant" && m.turnId === turn.turnId) ?? null : null;
 };
 
 const turnResult = (snapshot: ThreadDetailSnapshot, ctx: ToolContext, timedOut: boolean) => {
@@ -269,7 +269,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         // broke between the two, the thread exists with no turn: finish the
         // launch with the same command id rather than reporting a reuse.
         if (!existing.latestTurn) {
-          await api.startTurn({ ...ids, text, runtimeMode: existing.runtimeMode, interactionMode: existing.interactionMode });
+          await api.createThreadWithFirstTurn({ ...ids, text, projectId: existing.projectId, title: existing.title, modelSelection: existing.modelSelection, branch: existing.branch, worktreePath: existing.worktreePath, runtimeMode: existing.runtimeMode, interactionMode: existing.interactionMode });
         }
       } else {
         const refs = await api.listRefs(project.workspaceRoot);

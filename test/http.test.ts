@@ -17,6 +17,7 @@ describe("makeHttpClient", () => {
   it("sends the bearer header and query, and maps 401 to the pairing hint", async () => {
     let seen: { url: string; auth: string | undefined } | null = null;
     const ok = makeHttpClient("http://h", "tok", async (input, init) => {
+      expect((init?.headers as Record<string, string>)["x-t3-orchestration-protocol"]).toBe("2");
       seen = { url: String(input), auth: (init?.headers as Record<string, string>).authorization };
       return new Response('{"a":1}', { status: 200 });
     });

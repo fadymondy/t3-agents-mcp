@@ -103,6 +103,7 @@ describe("T3RpcClient", () => {
     const result = await client.call<{ a: number }>("echo", { a: 1 });
     expect(result).toEqual({ a: 1 });
     expect(seen[0]?.auth).toBe("Bearer secret");
+    expect(new URL(seen[0]!.path, origin).searchParams.get("orchestrationProtocol")).toBe("2");
     expect(seen[0]?.path.startsWith("/ws?")).toBe(true);
     client.close();
   });

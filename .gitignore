@@ -6,3 +6,10 @@ dist/
 # Local agent instructions (not shared)
 CLAUDE.md
 AGENTS.md
+
+# Never publish local credentials or validation captures
+.env
+.env.*
+credentials.json
+*.local.json
+coverage/

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -11,7 +12,7 @@ const USAGE = `t3-code-agent-mcp <command>
 
 Commands:
   serve            Run the MCP server on stdio (default)
-  pair <url|code>  Exchange a T3 pairing link or code for a token and store it
+  pair <url|code|--stdin>  Exchange a T3 pairing link or code for a token and store it
   status           Show the discovered T3 server and whether a token works
   help             Show this help
 
@@ -25,7 +26,7 @@ Environment:
 async function serve(): Promise<void> {
   const conn = await connect();
   const api = new T3Api(conn);
-  const server = new McpServer({ name: "t3-code-agent-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "t3-agents-mcp", version: JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version });
   registerTools(server, { api, origin: conn.server.origin, environmentId: conn.server.environmentId });
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -41,6 +42,11 @@ async function serve(): Promise<void> {
 
 async function pair(input: string | undefined): Promise<void> {
   if (!input) throw new Error("Usage: t3-code-agent-mcp pair <pairing-url-or-code>");
+  if (input === "--stdin") {
+    let value = "";
+    for await (const chunk of process.stdin) { value += chunk; if (value.length > 16384) throw new Error("Pairing input too long."); }
+    input = value.trim();
+  }
   const parsed = parsePairingInput(input);
   const origin = parsed.origin ?? (await discoverServer()).origin;
   const credential = await exchangePairingCode(origin, parsed.code);

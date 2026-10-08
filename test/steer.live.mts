@@ -2,13 +2,13 @@
  * Live steering check. Not part of `npm test`.
  * Starts a slow turn, then sends a second message while it is still running.
  *
- *   npx tsx test/steer.live.mts <projectIdOrRoot> [harness] [model]
+ *   npx tsx test/steer.live.mts <projectIdOrRoot> HARNESS MODEL STABLE_TEST_KEY
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const [projectArg, harnessArg = "claudeAgent", modelArg = ""] = process.argv.slice(2);
-if (!projectArg) throw new Error("Usage: npx tsx test/steer.live.mts <projectIdOrRoot> [harness] [model]");
+const [projectArg, harnessArg, modelArg, testKey] = process.argv.slice(2);
+if (!projectArg || !harnessArg || !modelArg || !testKey) throw new Error("Usage: npx tsx test/steer.live.mts <projectIdOrRoot> HARNESS MODEL STABLE_TEST_KEY");
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -28,19 +28,21 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 };
 
 const projects = await call("t3_list_projects");
-const project = projects.find((p: { id: string; workspaceRoot: string }) => p.id === projectArg || p.workspaceRoot.toLowerCase() === projectArg.toLowerCase()) ?? projects[0];
+const project = projects.find((p: { id: string; workspaceRoot: string }) => p.id === projectArg || p.workspaceRoot.toLowerCase() === projectArg.toLowerCase());
+if (!project) throw new Error("Exact scratch project not found; no fallback allowed.");
 const harnesses = await call("t3_list_harnesses");
 const harness = harnesses.find((h: { harnessId: string }) => h.harnessId === harnessArg);
 if (!harness) throw new Error(`harness ${harnessArg} not usable`);
-const model = modelArg || harness.models.find((m: { model: string }) => /haiku|mini|flash/.test(m.model))?.model || harness.models.find((m: { isDefault: boolean }) => m.isDefault)?.model;
+const model = modelArg;
+const key = testKey;
 
-const key = `steer-${Date.now()}`;
 const created = await call("t3_create_thread", {
   project: project.id,
   harness: harnessArg,
   model,
   title: "[mcp steer] mid-turn message",
   prompt: "Count slowly from 1 to 300, one number per line. Do not read files. If I send a new message, stop counting and reply with only the word STEERED.",
+  runtimeMode: "approval-required",
   idempotencyKey: key,
 });
 console.log("thread", created.threadId, created.url);

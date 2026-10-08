@@ -33,8 +33,8 @@ export async function saveCredential(path: string, credential: StoredCredential)
   const store = await readStore(path);
   store.credentials = store.credentials.filter((c) => c.origin !== credential.origin);
   store.credentials.push(credential);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(store, null, 2) + "\n", "utf8");
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   try {
     await chmod(path, 0o600);
   } catch {
@@ -118,7 +118,7 @@ export async function exchangePairingCode(
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Pairing failed (${response.status}): ${text.slice(0, 300)}`);
+    throw new Error(`Pairing failed (${response.status}). Create a fresh pairing link from your trusted T3 instance.`);
   }
   const result = JSON.parse(text) as {
     access_token: string;

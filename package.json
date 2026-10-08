@@ -1,17 +1,21 @@
 {
-  "name": "t3-code-agent-mcp",
-  "version": "0.2.0",
-  "description": "Local MCP server (stdio) that lets coding agents start and drive T3 Code threads through the running T3 server.",
+  "name": "t3-agents-mcp",
+  "version": "0.3.0",
+  "description": "Local stdio MCP server for Claude Code and Codex to manage T3 Code threads with orchestration protocol V2 support.",
   "type": "module",
   "license": "MIT",
   "bin": {
+    "t3-agents-mcp": "./dist/cli.js",
     "t3-code-agent-mcp": "./dist/cli.js"
   },
   "files": [
     "dist",
     "examples/orchestrator-prompt.md",
     "examples/orchestrator-prompt-standard.md",
-    "README.md"
+    "README.md",
+    "NOTICE",
+    "docs/COMPATIBILITY.md",
+    "scripts/pair.ps1"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -20,7 +24,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -32,11 +36,11 @@
     "@types/ws": "^8.18.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^5.0.3"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gfsaaser24/t3-code-agent-mcp.git"
+    "url": "git+https://github.com/fadymondy/t3-agents-mcp.git"
   },
   "keywords": [
     "mcp",
@@ -46,5 +50,9 @@
     "claude-code",
     "codex",
     "cursor"
-  ]
+  ],
+  "homepage": "https://github.com/fadymondy/t3-agents-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/fadymondy/t3-agents-mcp/issues"
+  }
 }
