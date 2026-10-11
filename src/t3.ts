@@ -46,6 +46,16 @@ export interface TurnStartSpec {
     text: string;
     runtimeMode: RuntimeMode;
     interactionMode: InteractionMode;
+    /** Delivery while a run is active; same meaning as T3's own `t3_thread_send`. Default auto. */
+    mode?: DeliveryMode;
+}
+export type DeliveryMode = "auto" | "queue" | "steer" | "restart";
+export interface ThreadSearchMatch {
+    threadId: string;
+    projectId: string;
+    source: "user" | "assistant";
+    snippet: string;
+    messageCreatedAt: string | null;
 }
 export interface WaitOptions {
     /** Only a turn that carries this user message counts as "the turn we are waiting for". */
@@ -92,6 +102,11 @@ export class T3Api {
         }
         return { ...(last as VcsListRefsResult), refs, nextCursor: null };
     }
+    /** Full-text search over thread messages in every project (T3 caps the limit at 50). */
+    async searchThreads(query: string, limit?: number): Promise<ThreadSearchMatch[]> {
+        const result = await this.conn.rpc.call<{ matches: ThreadSearchMatch[] }>("orchestration.searchThreads", { query, ...(limit === undefined ? {} : { limit }) });
+        return result.matches;
+    }
     dispatch(command: Record<string, unknown>): Promise<DispatchResult> {
         return this.conn.rpc.call<DispatchResult>("orchestration.dispatchCommand", command);
     }
@@ -114,6 +129,10 @@ export class T3Api {
     }
     async startTurn(spec: TurnStartSpec): Promise<DispatchResult> {
         const before = await this.thread(spec.threadId);
+        const mode = spec.mode ?? 'auto';
+        if ((mode === 'steer' || mode === 'restart') && before.thread.latestTurn?.state !== 'running') {
+            throw new Error(`Thread ${spec.threadId} has no active run to ${mode}. Use mode "auto" or "queue".`);
+        }
         // Mode changes are explicit commands in V2, never silently discarded.
         if (before.thread.runtimeMode !== spec.runtimeMode) {
             await this.dispatch({ type: 'thread.runtime-mode.set', commandId: spec.commandId + ':runtime', threadId: spec.threadId, runtimeMode: spec.runtimeMode });
@@ -124,7 +143,11 @@ export class T3Api {
         return this.dispatch({
             type: 'message.dispatch', commandId: spec.commandId, threadId: spec.threadId,
             messageId: spec.messageId, text: spec.text, attachments: [], createdBy: 'agent', creationSource: 'mcp',
-            deliveryIntent: 'auto', dispatchMode: { type: 'start_immediately' },
+            // The server resolves an intent against its serialized thread state, so
+            // a run that ends between our read and the dispatch cannot misroute it.
+            ...(mode === 'queue'
+                ? { dispatchMode: { type: 'queue_after_active' } }
+                : { deliveryIntent: mode, dispatchMode: { type: 'start_immediately' } }),
         });
     }
     interruptTurn(commandId: string, threadId: string, turnId?: string): Promise<DispatchResult> {

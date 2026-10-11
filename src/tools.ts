@@ -4,21 +4,43 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+import type { EnvironmentStatus } from "./environments.js";
 import { commandIds } from "./ids.js";
 import { registerOrchestrationPromptTool } from "./prompts.js";
 import { normalizePath, resolveExistingWorktree, resolveHarness, resolveModel, resolveProject, unusableReason } from "./resolve.js";
+import { PAIR_HINT } from "./rpc.js";
 import type { T3Api } from "./t3.js";
 import type { Message, ThreadDetailSnapshot, ThreadShell } from "./types.js";
 
 const RuntimeModeSchema = z.enum(["approval-required", "auto-accept-edits", "auto", "full-access"]);
 const InteractionModeSchema = z.enum(["default", "plan"]);
 const ContextSchema = z.array(z.object({ label: z.string().optional(), text: z.string() })).optional();
+const DeliveryModeSchema = z.enum(["auto", "queue", "steer", "restart"]);
+const EnvironmentSchema = z
+  .string()
+  .optional()
+  .describe('Target T3 environment by name or environment id (see t3_list_environments). Default "local", this machine.');
 
 export interface ToolContext {
   api: T3Api;
   origin: string;
   environmentId: string;
+  /** Name of a configured remote environment; absent for the local one. */
+  environment?: string;
 }
+
+/** Configured remote environments (see environments.ts). */
+export interface Environments {
+  resolve(nameOrId: string): Promise<ToolContext>;
+  statuses(verify: boolean): Promise<EnvironmentStatus[]>;
+  /** Drop a cached connection after a failure so the next call reconnects. */
+  evict(nameOrId: string): void;
+}
+
+const isLocal = (environment: string | undefined) => !environment || environment.trim().toLowerCase() === "local";
+
+/** Failures that mean the connection itself is bad, as opposed to a bad request. */
+const CONNECTION_FAILURE = /WebSocket|rejected the stored token|timed out|fetch failed|ECONN|unreachable|not paired|expired/i;
 
 const composeMessage = (prompt: string, context?: Array<{ label?: string; text: string }>): string => {
   if (!context?.length) return prompt;
@@ -57,6 +79,7 @@ const summarizeThread = (thread: ThreadShell | ThreadDetailSnapshot["thread"], c
     : {}),
   // Matches the web route `/$environmentId/$threadId`.
   url: `${ctx.origin}/${ctx.environmentId}/${thread.id}`,
+  ...(ctx.environment ? { environment: ctx.environment, environmentId: ctx.environmentId } : {}),
 });
 
 const renderMessages = (messages: Message[], limit: number, maxChars: number) =>
@@ -89,29 +112,117 @@ const turnResult = (snapshot: ThreadDetailSnapshot, ctx: ToolContext, timedOut: 
 
 const WAIT_DEFAULT_SECONDS = 300;
 
-/** Register one tool whose handler returns JSON or throws; errors become `isError` results. */
-function tool<Shape extends ZodRawShapeCompat>(
+/**
+ * Register one tool whose handler returns JSON or throws; errors become
+ * `isError` results. Errors from a remote environment name it, and point at
+ * that environment's pairing command rather than the local one.
+ */
+function registerTool<Shape extends ZodRawShapeCompat>(
   server: McpServer,
   name: string,
   meta: { title: string; description: string; inputSchema: Shape },
   run: (input: ShapeOutput<Shape>) => Promise<unknown>,
+  environments?: Environments,
 ): void {
   const callback = async (input: ShapeOutput<Shape>): Promise<CallToolResult> => {
     try {
       const value = await run(input);
       return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
     } catch (error) {
-      return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] };
+      let message = error instanceof Error ? error.message : String(error);
+      const environment = (input as { environment?: string }).environment;
+      if (!isLocal(environment)) {
+        if (CONNECTION_FAILURE.test(message)) environments?.evict(environment!);
+        message = message.replace(PAIR_HINT, `Re-pair it: t3-agents-mcp pair --environment ${environment} --stdin`);
+        if (!message.includes(`"${environment}"`)) message = `[environment "${environment}"] ${message}`;
+      }
+      return { isError: true, content: [{ type: "text" as const, text: message }] };
     }
   };
   // ToolCallback is a conditional type the compiler cannot narrow for a generic Shape; the shape is exact at every call site.
   server.registerTool(name, meta, callback as unknown as ToolCallback<Shape>);
 }
 
-export function registerTools(server: McpServer, ctx: ToolContext): void {
-  const { api } = ctx;
+export function registerTools(
+  server: McpServer,
+  local: ToolContext | (() => Promise<ToolContext>),
+  environments?: Environments,
+): void {
+  const target = async (environment: string | undefined): Promise<ToolContext> => {
+    if (isLocal(environment)) return typeof local === "function" ? local() : local;
+    if (!environments) throw new Error(`Unknown environment "${environment}": no remote environments are configured.`);
+    return environments.resolve(environment!);
+  };
+  const tool = <Shape extends ZodRawShapeCompat>(
+    srv: McpServer,
+    name: string,
+    meta: { title: string; description: string; inputSchema: Shape },
+    run: (input: ShapeOutput<Shape>) => Promise<unknown>,
+  ) => registerTool(srv, name, meta, run, environments);
 
   registerOrchestrationPromptTool(server);
+
+  tool(
+    server,
+    "t3_list_environments",
+    {
+      title: "List T3 environments",
+      description:
+        'List the T3 environments this MCP can reach: "local" (this machine) plus every remote one configured in environments.json, e.g. another desktop on the tailnet. Each entry says whether it is reachable and authorized. Pass an entry\'s name as `environment` to any other tool to act there.',
+      inputSchema: {
+        verify: z.boolean().optional().describe("Also check each token with an authenticated read (default true)"),
+      },
+    },
+    async ({ verify }) => {
+      const check = verify ?? true;
+      let localStatus: EnvironmentStatus;
+      try {
+        const ctx = await target(undefined);
+        localStatus = { name: "local", url: ctx.origin, local: true, reachable: true, environmentId: ctx.environmentId };
+        if (check) {
+          const shell = await ctx.api.shell();
+          Object.assign(localStatus, { authorized: true, projects: shell.projects.length, threads: shell.threads.length });
+        }
+      } catch (error) {
+        localStatus = { name: "local", url: "", local: true, reachable: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      const remote = environments ? await environments.statuses(check) : [];
+      return [localStatus, ...remote];
+    },
+  );
+
+  tool(
+    server,
+    "t3_search_threads",
+    {
+      title: "Search threads",
+      description:
+        "Full-text search over user and assistant messages in every project of an environment. Returns matching threads with their titles and a snippet.",
+      inputSchema: {
+        environment: EnvironmentSchema,
+        query: z.string().min(2).max(200),
+        limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
+      },
+    },
+    async ({ environment, query, limit }) => {
+      const ctx = await target(environment);
+      const [matches, shell] = await Promise.all([ctx.api.searchThreads(query, limit ?? 20), ctx.api.shell()]);
+      const byId = new Map(shell.threads.map((t) => [t.id, t]));
+      return matches.map((m) => {
+        const thread = byId.get(m.threadId);
+        return {
+          threadId: m.threadId,
+          title: thread?.title ?? null,
+          projectId: m.projectId,
+          source: m.source,
+          snippet: m.snippet,
+          messageCreatedAt: m.messageCreatedAt,
+          ...(thread ? { url: summarizeThread(thread, ctx).url } : {}),
+          ...(ctx.environment ? { environment: ctx.environment } : {}),
+        };
+      });
+    },
+  );
 
   tool(
     server,
@@ -119,9 +230,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List T3 projects",
       description: "List the projects the running T3 server knows about, with ids, titles, and workspace roots.",
-      inputSchema: {},
+      inputSchema: { environment: EnvironmentSchema },
     },
-    async () => {
+    async ({ environment }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const shell = await api.shell();
       return shell.projects.map((p) => ({
         id: p.id,
@@ -139,9 +252,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       title: "List worktrees for a project",
       description:
         "List the git worktrees and local branches of a T3 project. The project root is always a valid worktreePath. Pass the project id, exact title, or workspace root.",
-      inputSchema: { project: z.string().describe("Project id, exact title, or workspace root path") },
+      inputSchema: { environment: EnvironmentSchema, project: z.string().describe("Project id, exact title, or workspace root path") },
     },
-    async ({ project }) => {
+    async ({ environment, project }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const shell = await api.shell();
       const resolved = resolveProject(shell.projects, project);
       const refs = await api.listRefs(resolved.workspaceRoot);
@@ -168,9 +283,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       title: "List harnesses and models",
       description:
         "List the coding-agent harnesses configured in T3 (T3 calls them providers; harnessId is the provider instanceId) and the models each one offers. `usable: false` entries carry a `reason` and cannot start threads.",
-      inputSchema: { includeUnusable: z.boolean().optional().describe("Also list harnesses that cannot start threads right now") },
+      inputSchema: { environment: EnvironmentSchema, includeUnusable: z.boolean().optional().describe("Also list harnesses that cannot start threads right now") },
     },
-    async ({ includeUnusable }) => {
+    async ({ environment, includeUnusable }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const config = await api.config();
       return config.providers
         .map((p) => ({ provider: p, reason: unusableReason(p) }))
@@ -200,19 +317,24 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     "t3_list_threads",
     {
       title: "List threads",
-      description: "List recent T3 threads, newest first. Optionally filter by project.",
+      description: "List recent T3 threads, newest first, on this machine or a remote environment. Optionally filter by project or title.",
       inputSchema: {
+        environment: EnvironmentSchema,
         project: z.string().optional().describe("Project id, exact title, or workspace root path"),
+        titleContains: z.string().optional().describe("Case-insensitive title filter"),
         includeArchived: z.boolean().optional(),
         limit: z.number().int().min(1).max(200).optional().describe("Default 25"),
       },
     },
-    async ({ project, includeArchived, limit }) => {
+    async ({ environment, project, titleContains, includeArchived, limit }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const shell = await api.shell();
       const projectId = project ? resolveProject(shell.projects, project).id : undefined;
       return shell.threads
         .filter((t) => (projectId ? t.projectId === projectId : true))
         .filter((t) => includeArchived || t.archivedAt === null)
+        .filter((t) => !titleContains || t.title.toLowerCase().includes(titleContains.toLowerCase()))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, limit ?? 25)
         .map((t) => summarizeThread(t, ctx));
@@ -227,6 +349,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description:
         "Create a new thread in T3 with an explicit project, worktree, harness, and model, then send the first prompt. The thread appears in the T3 UI. Nothing is substituted: unknown or unusable choices fail with the valid options. Pass the same idempotencyKey on retries to guarantee a single launch; a key whose command T3 rejected is burned and needs a new key.",
       inputSchema: {
+        environment: EnvironmentSchema,
         project: z.string().describe("Project id, exact title, or workspace root (see t3_list_projects)"),
         harness: z.string().describe("Harness id exactly as listed by t3_list_harnesses, e.g. claudeAgent, codex, cursor"),
         model: z.string().describe("Model slug or alias exactly as listed for that harness"),
@@ -253,6 +376,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async (input) => {
+      const ctx = await target(input.environment);
+      const { api } = ctx;
       if (input.worktreePath && input.newWorktree) throw new Error("Pass either worktreePath or newWorktree, not both.");
       const [shell, config] = await Promise.all([api.shell(), api.config()]);
       const project = resolveProject(shell.projects, input.project);
@@ -329,11 +454,13 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Send a follow-up prompt",
       description:
-        "Send another user message to an existing T3 thread with the thread's current harness and model. Works while a turn is running: T3 hands the message to the harness mid-turn (steering), exactly as the T3 UI does. A retry with the same idempotencyKey is always safe.",
+        "Send another user message to an existing T3 thread with the thread's current harness and model, on this machine or a remote environment. `mode` picks delivery while a run is active, like T3's own t3_thread_send: auto steers a steerable run, otherwise queues; queue waits for the active run to finish; steer and restart need an active run. An idle thread starts a new turn in every mode except steer/restart. A retry with the same idempotencyKey is always safe.",
       inputSchema: {
+        environment: EnvironmentSchema,
         threadId: z.string(),
         prompt: z.string().min(1),
         context: ContextSchema,
+        mode: DeliveryModeSchema.optional().describe("auto (default), queue, steer, or restart"),
         runtimeMode: RuntimeModeSchema.optional().describe("Default: the thread's current mode"),
         interactionMode: InteractionModeSchema.optional().describe("Default: the thread's current mode"),
         idempotencyKey: z.string().optional().describe("Stable key; retries with the same key do not start a second turn"),
@@ -342,6 +469,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async (input) => {
+      const ctx = await target(input.environment);
+      const { api } = ctx;
       const before = await api.thread(input.threadId);
       const ids = commandIds(input.threadId, input.idempotencyKey);
       const alreadySent = before.thread.messages.some((m) => m.id === ids.messageId);
@@ -356,6 +485,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
           text: composeMessage(input.prompt, input.context),
           runtimeMode: input.runtimeMode ?? before.thread.runtimeMode,
           interactionMode: input.interactionMode ?? before.thread.interactionMode,
+          mode: input.mode ?? "auto",
         });
       }
       const base = { reused: alreadySent, idempotencyKey: ids.idempotencyKey };
@@ -376,12 +506,15 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       title: "Read a thread",
       description: "Read a thread's status, latest turn state, and recent messages (assistant replies included).",
       inputSchema: {
+        environment: EnvironmentSchema,
         threadId: z.string(),
         messageLimit: z.number().int().min(1).max(200).optional().describe("Default 10"),
         maxChars: z.number().int().min(100).max(200_000).optional().describe("Truncate each message to this many characters (default 20000)"),
       },
     },
-    async ({ threadId, messageLimit, maxChars }) => {
+    async ({ environment, threadId, messageLimit, maxChars }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const limit = messageLimit ?? 10;
       // Each turn holds at least a user + assistant message, so this window covers `limit` messages.
       const snapshot = await api.thread(threadId, Math.ceil(limit / 2) + 1);
@@ -400,11 +533,14 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       description:
         "Block until the thread's latest turn finishes (or the timeout passes) and return the assistant reply. Prefer wait=true on t3_create_thread / t3_send_message, which know exactly which turn to wait for.",
       inputSchema: {
+        environment: EnvironmentSchema,
         threadId: z.string(),
         timeoutSeconds: z.number().int().min(1).max(3600).optional().describe("Default 300"),
       },
     },
-    async ({ threadId, timeoutSeconds }) => {
+    async ({ environment, threadId, timeoutSeconds }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const { snapshot, timedOut } = await api.waitForTurnSettled(threadId, (timeoutSeconds ?? WAIT_DEFAULT_SECONDS) * 1000);
       return turnResult(snapshot, ctx, timedOut);
     },
@@ -416,9 +552,11 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Cancel the running turn",
       description: "Interrupt the thread's running turn. No-op with a clear message if nothing is running.",
-      inputSchema: { threadId: z.string() },
+      inputSchema: { environment: EnvironmentSchema, threadId: z.string() },
     },
-    async ({ threadId }) => {
+    async ({ environment, threadId }) => {
+      const ctx = await target(environment);
+      const { api } = ctx;
       const before = await api.thread(threadId, 1);
       const turn = before.thread.latestTurn;
       if (!turn || turn.state !== "running") {

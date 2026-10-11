@@ -1,3 +1,5 @@
+# Optional -Environment: a remote environment name from environments.json.
+param([string]$Environment = '')
 $ErrorActionPreference = 'Stop'
 $credentialDir = Join-Path $env:USERPROFILE '.t3-code-agent-mcp'
 if ($env:T3_MCP_CREDENTIALS) { throw 'Custom credential path: secure its ACL and use pair --stdin directly.' }
@@ -11,7 +13,9 @@ $secret = Read-Host 'Paste your LOCAL or explicitly trusted T3 pairing link (hid
 $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
 try {
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    $plain | node (Join-Path $PSScriptRoot '../dist/cli.js') pair --stdin
+    $cli = Join-Path $PSScriptRoot '../dist/cli.js'
+    if ($Environment) { $plain | node $cli pair --environment $Environment --stdin }
+    else { $plain | node $cli pair --stdin }
     if ($LASTEXITCODE -ne 0) { throw 'Pairing failed.' }
 } finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)

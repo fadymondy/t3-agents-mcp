@@ -63,10 +63,11 @@ export function isProcessAlive(pid: number): boolean {
 export async function probeEnvironment(
   origin: string,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs = 3000,
 ): Promise<{ environmentId: string; serverVersion?: string; label?: string } | null> {
   try {
     const response = await fetchImpl(new URL("/.well-known/t3/environment", origin), {
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) return null;
     const body = (await response.json()) as { environmentId?: string; serverVersion?: string; label?: string };
