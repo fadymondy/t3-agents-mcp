@@ -270,6 +270,7 @@ export function toolEnvironments(registry: EnvironmentRegistry): Environments {
   };
   return {
     resolve,
+    configuredId: async (nameOrId) => (await registry.find(nameOrId)).environmentId,
     evict: (nameOrId) => {
       void registry.find(nameOrId).then((entry) => registry.evict(entry.name), () => undefined);
     },

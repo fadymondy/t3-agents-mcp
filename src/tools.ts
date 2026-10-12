@@ -32,6 +32,8 @@ export interface ToolContext {
 /** Configured remote environments (see environments.ts). */
 export interface Environments {
   resolve(nameOrId: string): Promise<ToolContext>;
+  /** The environment id configured for a name or id, if any; never connects. */
+  configuredId?(nameOrId: string): Promise<string | undefined>;
   statuses(verify: boolean): Promise<EnvironmentStatus[]>;
   /** Drop a cached connection after a failure so the next call reconnects. */
   evict(nameOrId: string): void;
@@ -148,8 +150,19 @@ export function registerTools(
   local: ToolContext | (() => Promise<ToolContext>),
   environments?: Environments,
 ): void {
+  const localContext = async (): Promise<ToolContext> => (typeof local === "function" ? local() : local);
   const target = async (environment: string | undefined): Promise<ToolContext> => {
-    if (isLocal(environment)) return typeof local === "function" ? local() : local;
+    if (isLocal(environment)) return localContext();
+    // An entry (or id) naming this machine itself, e.g. a shared config's
+    // "windows" entry read on Windows, goes through the local connection: the
+    // tailnet loopback is usually unpaired here and would fail.
+    const here = await localContext().catch(() => undefined);
+    if (here) {
+      const id = here.environmentId.toLowerCase();
+      const wanted = environment!.trim().toLowerCase();
+      const configured = await environments?.configuredId?.(environment!).catch(() => undefined);
+      if (wanted === id || configured?.toLowerCase() === id) return here;
+    }
     if (!environments) throw new Error(`Unknown environment "${environment}": no remote environments are configured.`);
     return environments.resolve(environment!);
   };
@@ -187,7 +200,16 @@ export function registerTools(
         localStatus = { name: "local", url: "", local: true, reachable: false, error: error instanceof Error ? error.message : String(error) };
       }
       const remote = environments ? await environments.statuses(check) : [];
-      return [localStatus, ...remote];
+      const localId = localStatus.environmentId?.toLowerCase();
+      const marked = await Promise.all(
+        remote.map(async (status) => {
+          const configured = await environments?.configuredId?.(status.name).catch(() => undefined);
+          if (!localId || configured?.toLowerCase() !== localId) return status;
+          const { error: _unused, ...rest } = status;
+          return { ...rest, ...localStatus, name: status.name, url: status.url, local: true, aliasOf: "local" };
+        }),
+      );
+      return [localStatus, ...marked];
     },
   );
 

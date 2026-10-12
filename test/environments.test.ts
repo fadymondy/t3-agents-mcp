@@ -186,6 +186,8 @@ describe("remote environments through the MCP tools", () => {
           { name: "wrong-token", url: remote.origin, auth: { type: "env", var: "BAD_TOKEN" } },
           { name: "impostor", url: remote.origin, environmentId: "someone-else", auth: { type: "env", var: "WIN_TOKEN" } },
           { name: "down", url: "http://127.0.0.1:9", auth: { type: "env", var: "WIN_TOKEN" }, timeoutMs: 1000 },
+          // This machine's own tailnet address, unpaired: must route to local.
+          { name: "self", url: "http://127.0.0.1:9", environmentId: "mac-env", auth: { type: "env", var: "NO_TOKEN" }, timeoutMs: 1000 },
         ],
       }),
     );
@@ -302,6 +304,13 @@ describe("remote environments through the MCP tools", () => {
     const result = await call("t3_list_threads", { environment: "down" });
     expect(result.error).toMatch(/"down" \(http:\/\/127\.0\.0\.1:9\) is unreachable/);
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("routes an entry or id naming this machine through the local connection", async () => {
+    expect(await call("t3_list_threads", { environment: "self" })).toEqual([]);
+    expect(await call("t3_list_threads", { environment: "mac-env" })).toEqual([]);
+    const list = await call("t3_list_environments");
+    expect(list.find((e: { name: string }) => e.name === "self")).toMatchObject({ local: true, aliasOf: "local", authorized: true });
   });
 
   it("lists the known names for an unknown environment", async () => {
