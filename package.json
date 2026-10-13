@@ -12,6 +12,7 @@
     "dist",
     "examples/orchestrator-prompt.md",
     "examples/orchestrator-prompt-standard.md",
+    "examples/environments.json",
     "README.md",
     "NOTICE",
     "docs/COMPATIBILITY.md",
