@@ -48,6 +48,8 @@ export interface TurnStartSpec {
     interactionMode: InteractionMode;
     /** Delivery while a run is active; same meaning as T3's own `t3_thread_send`. Default auto. */
     mode?: DeliveryMode;
+    /** The model for this one turn (`message.dispatch.modelSelection`); omitted = the thread's model. */
+    modelSelection?: ModelSelection;
 }
 export type DeliveryMode = "auto" | "queue" | "steer" | "restart";
 export interface ThreadSearchMatch {
@@ -143,6 +145,7 @@ export class T3Api {
         return this.dispatch({
             type: 'message.dispatch', commandId: spec.commandId, threadId: spec.threadId,
             messageId: spec.messageId, text: spec.text, attachments: [], createdBy: 'agent', creationSource: 'mcp',
+            ...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
             // The server resolves an intent against its serialized thread state, so
             // a run that ends between our read and the dispatch cannot misroute it.
             ...(mode === 'queue'
