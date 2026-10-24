@@ -286,6 +286,21 @@ describe("remote environments through the MCP tools", () => {
     expect(rpcCalls.at(-1)!.payload).toMatchObject({ deliveryIntent: "auto", dispatchMode: { type: "start_immediately" } });
   });
 
+  it("passes a per-turn model as message.dispatch.modelSelection on the thread's harness", async () => {
+    await call("t3_send_message", { environment: "windows", threadId: "hosbah", prompt: "hi", mode: "queue", idempotencyKey: "m1", model: "claude-haiku-5-5" });
+    const payload = rpcCalls.at(-1)!.payload;
+    expect(payload).toMatchObject({ type: "message.dispatch", modelSelection: { model: "claude-haiku-5-5" } });
+    expect(typeof payload.modelSelection.instanceId).toBe("string");
+
+    await call("t3_send_message", { environment: "windows", threadId: "hosbah", prompt: "plain", idempotencyKey: "m2" });
+    expect(rpcCalls.at(-1)!.payload.modelSelection).toBeUndefined();
+
+    const before = rpcCalls.length;
+    const wrong = await call("t3_send_message", { environment: "windows", threadId: "hosbah", prompt: "x", model: "gpt-5.5", harness: "not-the-thread-harness" });
+    expect(wrong.error).toMatch(/same harness/);
+    expect(rpcCalls.filter((c) => c.payload?.type === "message.dispatch").length).toBe(rpcCalls.slice(0, before).filter((c) => c.payload?.type === "message.dispatch").length);
+  });
+
   it("refuses to steer an idle thread", async () => {
     const before = rpcCalls.length;
     const result = await call("t3_send_message", { environment: "windows", threadId: "hosbah", prompt: "x", mode: "steer" });

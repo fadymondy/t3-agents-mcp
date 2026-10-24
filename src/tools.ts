@@ -476,7 +476,7 @@ export function registerTools(
     {
       title: "Send a follow-up prompt",
       description:
-        "Send another user message to an existing T3 thread with the thread's current harness and model, on this machine or a remote environment. `mode` picks delivery while a run is active, like T3's own t3_thread_send: auto steers a steerable run, otherwise queues; queue waits for the active run to finish; steer and restart need an active run. An idle thread starts a new turn in every mode except steer/restart. A retry with the same idempotencyKey is always safe.",
+        "Send another user message to an existing T3 thread with the thread's current harness and model (or `model` for this one turn), on this machine or a remote environment. `mode` picks delivery while a run is active, like T3's own t3_thread_send: auto steers a steerable run, otherwise queues; queue waits for the active run to finish; steer and restart need an active run. An idle thread starts a new turn in every mode except steer/restart. A retry with the same idempotencyKey is always safe.",
       inputSchema: {
         environment: EnvironmentSchema,
         threadId: z.string(),
@@ -488,12 +488,24 @@ export function registerTools(
         idempotencyKey: z.string().optional().describe("Stable key; retries with the same key do not start a second turn"),
         wait: z.boolean().optional().describe("Wait for the turn to finish and return the reply (default false)"),
         timeoutSeconds: z.number().int().min(1).max(3600).optional().describe("Max wait when wait=true (default 300)"),
+        model: z.string().min(1).optional().describe("Model slug for this turn only (see t3_list_harnesses); default: the thread's model"),
+        harness: z.string().min(1).optional().describe("With model: the harness (provider instanceId). Must be the thread's own; default it"),
+        modelOptions: z.record(z.string(), z.unknown()).optional().describe("With model: option values (effort, fastMode…); default none"),
       },
     },
     async (input) => {
       const ctx = await target(input.environment);
       const { api } = ctx;
       const before = await api.thread(input.threadId);
+      const current = before.thread.modelSelection;
+      if ((input.harness || input.modelOptions) && !input.model) throw new Error("harness and modelOptions need model.");
+      // T3 locks a thread to its provider: a per-turn model stays on the thread's harness.
+      if (input.harness && current && input.harness !== current.instanceId) {
+        throw new Error(`Thread ${input.threadId} runs on ${current.instanceId}; a per-turn model must use the same harness (got ${input.harness}).`);
+      }
+      const modelSelection = input.model
+        ? { instanceId: input.harness ?? current.instanceId, model: input.model, ...(input.modelOptions ? { options: input.modelOptions } : {}) }
+        : undefined;
       const ids = commandIds(input.threadId, input.idempotencyKey);
       const alreadySent = before.thread.messages.some((m) => m.id === ids.messageId);
       // No "turn is running" guard on purpose: T3 accepts thread.turn.start
@@ -508,6 +520,7 @@ export function registerTools(
           runtimeMode: input.runtimeMode ?? before.thread.runtimeMode,
           interactionMode: input.interactionMode ?? before.thread.interactionMode,
           mode: input.mode ?? "auto",
+          modelSelection,
         });
       }
       const base = { reused: alreadySent, idempotencyKey: ids.idempotencyKey };
